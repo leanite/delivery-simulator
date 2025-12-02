@@ -3,6 +3,8 @@ package domain
 import (
 	"errors"
 	"time"
+
+	"github.com/leanite/delivery-simulator/internal/common"
 )
 
 type OrderStatus string
@@ -13,12 +15,14 @@ const (
 )
 
 type Order struct {
-	id         string
+	id         common.ID
 	customerId string
 	items      []LineItem
 	status     OrderStatus
 	createdAt  time.Time
 }
+
+var _ common.Entity = (*Order)(nil)
 
 type LineItem struct {
 	ProductID string
@@ -36,12 +40,16 @@ func NewOrder(id string, customerId string) (*Order, error) {
 	}
 
 	return &Order{
-		id:         id,
+		id:         common.NewID(),
 		customerId: customerId,
 		status:     OrderStatusDraft,
 		createdAt:  time.Now(),
 		items:      []LineItem{},
 	}, nil
+}
+
+func (o *Order) ID() common.ID {
+	return o.id
 }
 
 func (o *Order) AddItem(productID, name string, price Money, qty int) error {
