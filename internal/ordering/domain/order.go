@@ -16,43 +16,41 @@ const (
 
 type Order struct {
 	id         common.ID
-	customerId string
+	customerID common.ID
 	items      []LineItem
 	status     OrderStatus
 	createdAt  time.Time
+	changes    []common.DomainEvent
 }
 
-var _ common.Entity = (*Order)(nil)
-
 type LineItem struct {
-	ProductID string
+	ProductID common.ID
 	Name      string
 	Quantity  int
 	UnitPrice Money
 }
 
-func NewOrder(id string, customerId string) (*Order, error) {
-	if id == "" {
-		return nil, errors.New("order ID is required")
-	}
-	if customerId == "" {
-		return nil, errors.New("customer ID is required")
-	}
+func NewOrder(id common.ID, customerID common.ID) (*Order, error) {
+	createdAt := time.Now()
 
-	return &Order{
-		id:         common.NewID(),
-		customerId: customerId,
+	event := OrderCreatedEvent{
+		OrderID:    id,
+		CustomerID: customerID,
+		CreatedAt:  createdAt,
+	}
+	order := Order{
+		id:         id,
+		customerID: customerID,
 		status:     OrderStatusDraft,
-		createdAt:  time.Now(),
+		createdAt:  createdAt,
 		items:      []LineItem{},
-	}, nil
+	}
+	order.apply(event)
+
+	return &order, nil
 }
 
-func (o *Order) ID() common.ID {
-	return o.id
-}
-
-func (o *Order) AddItem(productID, name string, price Money, qty int) error {
+func (o *Order) AddItem(productID common.ID, name string, price Money, qty int) error {
 	if o.status != OrderStatusDraft {
 		return errors.New("cannot add items to a confirmed order")
 	}
@@ -60,14 +58,31 @@ func (o *Order) AddItem(productID, name string, price Money, qty int) error {
 		return errors.New("quantity must be greater than zero")
 	}
 
-	item := LineItem{
-		ProductID: productID,
-		Name:      name,
-		UnitPrice: price,
-		Quantity:  qty,
+	event := NewOrderItemAddedEvent(o.id, productID, name, price.amount, qty)
+	o.apply(event)
+
+	return nil
+}
+
+func (o *Order) RemoveItem(productID common.ID) error {
+	if o.status != OrderStatusDraft {
+		return errors.New("cannot remove items to a confirmed order")
 	}
 
-	o.items = append(o.items, item)
+	exists := false
+	for _, item := range o.items {
+		if item.ProductID == productID {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		return errors.New("item not found")
+	}
+
+	event := NewOrderItemRemovedEvent(o.id, productID)
+	o.apply(event)
+
 	return nil
 }
 
@@ -92,6 +107,38 @@ func (o *Order) Confirm() error {
 		return errors.New("cannot confirm empty order")
 	}
 
-	o.status = OrderStatusConfirmed
+	event := NewOrderConfirmedEvent(o.id)
+	o.apply(event)
+
 	return nil
+}
+
+func (o *Order) apply(event common.DomainEvent) {
+	o.changes = append(o.changes, event)
+
+	switch e := event.(type) {
+	case OrderConfirmedEvent:
+		o.status = OrderStatusConfirmed
+	case OrderCreatedEvent:
+		o.id = e.OrderID
+		o.customerID = e.CustomerID
+		o.status = OrderStatusDraft
+	case OrderItemAddedEvent:
+		unitPrice, _ := NewMoney(e.Price, "BRL")
+		item := LineItem{
+			ProductID: e.ProductID,
+			Name:      e.Name,
+			UnitPrice: unitPrice,
+			Quantity:  e.Quantity,
+		}
+		o.items = append(o.items, item)
+	case OrderItemRemovedEvent:
+		newItems := o.items[:0]
+		for _, item := range o.items {
+			if item.ProductID != e.ProductID {
+				newItems = append(newItems, item)
+			}
+		}
+		o.items = newItems
+	}
 }
